@@ -1,68 +1,63 @@
-# Maven package Java project Web App to Linux on Azure
-# Build your Java project and deploy it to Azure as a Linux web app
-# Add steps that analyze code, save build artifacts, deploy, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/java
-
 trigger:
-- main
+- '*'
+
+pool:
+  vmImage: 'ubuntu-20.04'
+  demands:
+  - npm
 
 variables:
+  buildConfiguration: 'Release'
+  dotnetSdkVersion: '6.x'
 
-  # Azure Resource Manager connection created during pipeline creation
-  azureSubscription: '592c0d11-6e3d-42b7-a48d-b5c6343f17f7'
+steps:
+- task: UseDotNet@2
+  displayName: 'Use .NET SDK $(dotnetSdkVersion)'
+  inputs:
+    version: '$(dotnetSdkVersion)'
 
-  # Web app name
-  webAppName: 'JSPTimezoneConverter'
+- task: Npm@1
+  displayName: 'Run npm install'
+  inputs:
+    verbose: false
 
-  # Environment name
-  environmentName: 'JSPTimezoneConverter'
+- task: gulp@1
+  displayName: 'Run gulp tasks'
 
-  # Agent VM image name
-  vmImageName: 'ubuntu-latest'
+- script: 'echo "$(Build.DefinitionName), $(Build.BuildId), $(Build.BuildNumber)" > buildinfo.txt'
+  displayName: 'Write build info'
 
-stages:
-- stage: Build
-  displayName: Build stage
-  jobs:
-  - job: MavenPackageAndPublishArtifacts
-    displayName: Maven Package and Publish Artifacts
-    pool:
-      vmImage: $(vmImageName)
 
-    steps:
-    - task: Maven@3
-      displayName: 'Maven Package'
-      inputs:
-        mavenPomFile: 'MyWebApp/pom.xml'
+- task: DotNetCoreCLI@2
+  displayName: 'Restore project dependencies'
+  inputs:
+    command: 'restore'
+    projects: '**/*.csproj'
 
-    - task: CopyFiles@2
-      displayName: 'Copy Files to artifact staging directory'
-      inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)'
-        Contents: '**/target/*.?(war|jar)'
-        TargetFolder: $(Build.ArtifactStagingDirectory)
+- task: DotNetCoreCLI@2
+  displayName: 'Build the project - $(buildConfiguration)'
+  inputs:
+    command: 'build'
+    arguments: '--no-restore --configuration $(buildConfiguration)'
+    projects: '**/*.csproj'
 
-    - upload: $(Build.ArtifactStagingDirectory)
-      artifact: drop
+- task: DotNetCoreCLI@2
+  displayName: 'Run unit tests - $(buildConfiguration)'
+  inputs:
+    command: 'test'
+    arguments: '--no-build --configuration $(buildConfiguration)'
+    publishTestResults: true
+    projects: '**/*.Tests.csproj'
 
-- stage: Deploy
-  displayName: Deploy stage
-  dependsOn: Build
+- task: DotNetCoreCLI@2
+  displayName: 'Publish the project - $(buildConfiguration)'
+  inputs:
+    command: 'publish'
+    projects: '**/*.csproj'
+    publishWebProjects: false
+    arguments: '--no-build --configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/$(buildConfiguration)'
+    zipAfterPublish: true
+
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact: drop'
   condition: succeeded()
-  jobs:
-  - deployment: DeployLinuxWebApp
-    displayName: Deploy Linux Web App
-    environment: $(environmentName)
-    pool:
-      vmImage: $(vmImageName)
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: AzureWebApp@1
-            displayName: 'Azure Web App Deploy: JSPTimezoneConverter'
-            inputs:
-              azureSubscription: $(azureSubscription)
-              appType: webAppLinux
-              appName: $(webAppName)
-              package: '$(Pipeline.Workspace)/drop/**/target/*.?(war|jar)'
